@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "fs";
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// -- Config -------------------------------------------------------------------
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -18,27 +18,23 @@ const { topics, language, maxStoriesPerTopic } = config;
 
 const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
-// ── Claude agent: search + summarize one topic ────────────────────────────────
+// -- Claude agent: search + summarize one topic -------------------------------
 async function summarizeTopic(topic) {
   console.log(`  Researching: ${topic}`);
 
   const today = new Date().toISOString().split("T")[0];
 
-  // Agentic loop: Claude may call web_search multiple times before answering
   const messages = [
     {
       role: "user",
-      content: `Today is ${today}. Search the web for the most important technology news about "${topic}" from the last 24 hours.
-
-Return a summary in ${language} with this exact format:
-
-**${topic}**
-
-For each story (up to ${maxStoriesPerTopic}):
-• [Story title](URL) — 1-2 sentence summary of what happened and why it matters.
-
-If there are no significant stories in the last 24h, say so briefly.
-Do not include anything outside this format.`,
+      content:
+        `Today is ${today}. Search the web for the most important technology news about "${topic}" from the last 24 hours.\n\n` +
+        `If there are no significant stories in the last 24 hours, reply with exactly: NO_NEWS\n\n` +
+        `Otherwise return a summary in ${language} with this exact format:\n\n` +
+        `**${topic}**\n\n` +
+        `For each story (up to ${maxStoriesPerTopic}):\n` +
+        `- [Story title](URL) -- 1-2 sentence summary of what happened and why it matters.\n\n` +
+        `Do not include anything outside this format.`,
     },
   ];
 
@@ -55,33 +51,35 @@ Do not include anything outside this format.`,
 
     if (response.stop_reason !== "tool_use") break;
 
-    // Append assistant turn
     messages.push({ role: "assistant", content: response.content });
 
-    // Process tool calls and append tool results
     const toolResults = response.content
       .filter((b) => b.type === "tool_use")
       .map((toolUse) => ({
         type: "tool_result",
         tool_use_id: toolUse.id,
-        // The SDK handles injecting the actual search results automatically
-        // when using the built-in web_search tool type
         content: "",
       }));
 
     messages.push({ role: "user", content: toolResults });
   }
 
-  // Extract the final text response
   const text = response.content
     .filter((b) => b.type === "text")
     .map((b) => b.text)
-    .join("\n");
+    .join("\n")
+    .trim();
+
+  // Return null if no significant news found
+  if (text === "NO_NEWS" || text.startsWith("NO_NEWS")) {
+    console.log(`  No significant news for: ${topic} — skipping`);
+    return null;
+  }
 
   return text;
 }
 
-// ── Telegram sender ───────────────────────────────────────────────────────────
+// -- Telegram sender ----------------------------------------------------------
 async function sendToTelegram(text) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
 
@@ -104,7 +102,7 @@ async function sendToTelegram(text) {
   return res.json();
 }
 
-// ── Split long messages (Telegram limit: 4096 chars) ─────────────────────────
+// -- Split long messages (Telegram limit: 4096 chars) -------------------------
 function splitMessage(text, maxLen = 4000) {
   if (text.length <= maxLen) return [text];
 
@@ -124,16 +122,14 @@ function splitMessage(text, maxLen = 4000) {
   return chunks;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ---------------------------------------------------------------------
 async function main() {
-  const date = new Date().toLocaleDateString(language === "English" ? "en-US" : "default", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const date = new Date().toLocaleDateString(
+    language === "English" ? "en-US" : "default",
+    { weekday: "long", year: "numeric", month: "long", day: "numeric" }
+  );
 
-  console.log(`\n🤖 Tech News Digest — ${date}`);
+  console.log(`\nTech News Digest -- ${date}`);
   console.log(`Topics: ${topics.join(", ")}\n`);
 
   const summaries = [];
@@ -141,24 +137,28 @@ async function main() {
   for (const topic of topics) {
     try {
       const summary = await summarizeTopic(topic);
-      summaries.push(summary);
+      if (summary) summaries.push(summary);
     } catch (err) {
-      console.error(`  ✗ Failed for topic "${topic}":`, err.message);
-      summaries.push(`**${topic}**\n_Could not fetch news for this topic._`);
+      console.error(`  Failed for topic "${topic}":`, err.message);
     }
   }
 
-  const header = `🗞 *Tech News Digest — ${date}*\n\n`;
+  if (summaries.length === 0) {
+    console.log("No significant news found for any topic today. Nothing sent.");
+    return;
+  }
+
+  const header = `*Tech News Digest -- ${date}*\n\n`;
   const fullMessage = header + summaries.join("\n\n---\n\n");
 
-  console.log("\nSending to Telegram...");
+  console.log(`\nSending ${summaries.length} topic(s) to Telegram...`);
 
   const chunks = splitMessage(fullMessage);
   for (const chunk of chunks) {
     await sendToTelegram(chunk);
   }
 
-  console.log(`✓ Sent ${chunks.length} message(s) to Telegram.\n`);
+  console.log(`Sent ${chunks.length} message(s) to Telegram.\n`);
 }
 
 main().catch((err) => {
