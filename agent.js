@@ -29,12 +29,12 @@ async function summarizeTopic(topic) {
       role: "user",
       content:
         `Today is ${today}. Search the web for the most important technology news about "${topic}" from the last 24 hours.\n\n` +
-        `If there are no significant stories in the last 24 hours, reply with exactly: NO_NEWS\n\n` +
+        `If there are no significant stories published in the last 24 hours, output ONLY the single token: NO_NEWS — nothing else, no explanation, no apology.\n\n` +
         `Otherwise return a summary in ${language} with this exact format:\n\n` +
         `**${topic}**\n\n` +
         `For each story (up to ${maxStoriesPerTopic}):\n` +
         `- [Story title](URL) -- 1-2 sentence summary of what happened and why it matters.\n\n` +
-        `Do not include anything outside this format.`,
+        `Output ONLY the formatted list above or ONLY the token NO_NEWS. No other text whatsoever.`,
     },
   ];
 
@@ -71,7 +71,7 @@ async function summarizeTopic(topic) {
     .trim();
 
   // Return null if no significant news found
-  if (text === "NO_NEWS" || text.startsWith("NO_NEWS")) {
+  if (/^NO.?NEWS$/i.test(text) || /\bNO.?NEWS\b/i.test(text)) {
     console.log(`  No significant news for: ${topic} — skipping`);
     return null;
   }
