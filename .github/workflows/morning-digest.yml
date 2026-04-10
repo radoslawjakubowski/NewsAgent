@@ -6,7 +6,7 @@ on:
     # UTC+1 (CET)  → use 06:00 UTC
     # UTC+2 (EET)  → use 05:00 UTC
     # UTC-5 (EST)  → use 12:00 UTC
-    - cron: "0 4 * * *"
+    - cron: "45 3 * * *"
 
   # Allows you to trigger manually from the Actions tab for testing
   workflow_dispatch:
