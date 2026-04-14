@@ -2,11 +2,8 @@ name: Morning Tech Digest
 
 on:
   schedule:
-    # Runs every day at 07:00 UTC — adjust to your timezone
-    # UTC+1 (CET)  → use 06:00 UTC
-    # UTC+2 (EET)  → use 05:00 UTC
-    # UTC-5 (EST)  → use 12:00 UTC
-    - cron: "45 3 * * *"
+    # Runs every day at 02:45 UTC — adjust to your timezone
+    - cron: "45 2 * * *"
 
   # Allows you to trigger manually from the Actions tab for testing
   workflow_dispatch:
