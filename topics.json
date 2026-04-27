@@ -7,5 +7,7 @@
     "IBM webMethods"
   ],
   "language": "English",
-  "maxStoriesPerTopic": 5
+  "maxStoriesPerTopic": 5,
+  "provider": "claude",
+  "model": "claude-sonnet-4-20250514"
 }

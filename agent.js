@@ -1,49 +1,59 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "fs";
 
 // -- Config -------------------------------------------------------------------
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-if (!ANTHROPIC_API_KEY || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-  console.error(
-    "Missing required env vars: ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID"
-  );
+if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+  console.error("Missing required env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID");
   process.exit(1);
 }
 
 const config = JSON.parse(readFileSync("topics.json", "utf-8"));
-const { topics, language, maxStoriesPerTopic } = config;
+const { topics, language, maxStoriesPerTopic, provider = "claude" } = config;
 
-const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const DEFAULT_MODELS = {
+  claude: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.0-flash",
+  openai: "gpt-4o",
+};
 
-// -- Claude agent: search + summarize one topic -------------------------------
-async function summarizeTopic(topic) {
-  console.log(`  Researching: ${topic}`);
+const model = config.model ?? DEFAULT_MODELS[provider];
 
-  const today = new Date().toISOString().split("T")[0];
+if (!model) {
+  console.error(`Unknown provider "${provider}". Supported: claude, gemini, openai`);
+  process.exit(1);
+}
 
-  const messages = [
-    {
-      role: "user",
-      content:
-        `Today is ${today}. Search the web for the most important technology news about "${topic}" from the last 24 hours.\n\n` +
-        `If there are no significant stories published in the last 24 hours, output ONLY the single token: NO_NEWS — nothing else, no explanation, no apology.\n\n` +
-        `Otherwise return a summary in ${language} with this exact format:\n\n` +
-        `**${topic}**\n\n` +
-        `For each story (up to ${maxStoriesPerTopic}):\n` +
-        `- [Story title](URL) -- 1-2 sentence summary of what happened and why it matters.\n\n` +
-        `Output ONLY the formatted list above or ONLY the token NO_NEWS. No other text whatsoever.`,
-    },
-  ];
+console.log(`Provider: ${provider} / Model: ${model}`);
+
+// -- Build the prompt ---------------------------------------------------------
+function buildPrompt(topic, today) {
+  return (
+    `Today is ${today}. Search the web for the most important technology news about "${topic}" from the last 24 hours.\n\n` +
+    `If there are no significant stories published in the last 24 hours, output ONLY the single token: NO_NEWS — nothing else, no explanation, no apology.\n\n` +
+    `Otherwise return a summary in ${language} with this exact format:\n\n` +
+    `**${topic}**\n\n` +
+    `For each story (up to ${maxStoriesPerTopic}):\n` +
+    `- [Story title](URL) -- 1-2 sentence summary of what happened and why it matters.\n\n` +
+    `Output ONLY the formatted list above or ONLY the token NO_NEWS. No other text whatsoever.`
+  );
+}
+
+// -- Provider: Claude ---------------------------------------------------------
+async function summarizeWithClaude(topic, today) {
+  const { default: Anthropic } = await import("@anthropic-ai/sdk");
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing env var: ANTHROPIC_API_KEY");
+
+  const client = new Anthropic({ apiKey });
+  const messages = [{ role: "user", content: buildPrompt(topic, today) }];
 
   let response;
-
-  // Agentic loop: keep going while Claude wants to use tools
   while (true) {
     response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model,
       max_tokens: 1024,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages,
@@ -52,25 +62,69 @@ async function summarizeTopic(topic) {
     if (response.stop_reason !== "tool_use") break;
 
     messages.push({ role: "assistant", content: response.content });
-
     const toolResults = response.content
       .filter((b) => b.type === "tool_use")
-      .map((toolUse) => ({
-        type: "tool_result",
-        tool_use_id: toolUse.id,
-        content: "",
-      }));
-
+      .map((t) => ({ type: "tool_result", tool_use_id: t.id, content: "" }));
     messages.push({ role: "user", content: toolResults });
   }
 
-  const text = response.content
+  return response.content
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("\n")
     .trim();
+}
 
-  // Return null if no significant news found
+// -- Provider: Gemini ---------------------------------------------------------
+async function summarizeWithGemini(topic, today) {
+  const { GoogleGenAI } = await import("@google/genai");
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Missing env var: GEMINI_API_KEY");
+
+  const ai = new GoogleGenAI({ apiKey });
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: buildPrompt(topic, today) }] }],
+    config: { tools: [{ googleSearch: {} }] },
+  });
+
+  return response.candidates?.[0]?.content?.parts
+    ?.map((p) => p.text ?? "")
+    .join("\n")
+    .trim() ?? "";
+}
+
+// -- Provider: OpenAI ---------------------------------------------------------
+async function summarizeWithOpenAI(topic, today) {
+  const { default: OpenAI } = await import("openai");
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("Missing env var: OPENAI_API_KEY");
+
+  const openai = new OpenAI({ apiKey });
+  const response = await openai.responses.create({
+    model,
+    tools: [{ type: "web_search_preview" }],
+    input: buildPrompt(topic, today),
+  });
+
+  return response.output_text?.trim() ?? "";
+}
+
+// -- Dispatch -----------------------------------------------------------------
+const PROVIDERS = { claude: summarizeWithClaude, gemini: summarizeWithGemini, openai: summarizeWithOpenAI };
+
+async function summarizeTopic(topic) {
+  console.log(`  Researching: ${topic}`);
+
+  const today = new Date().toISOString().split("T")[0];
+  const fn = PROVIDERS[provider];
+
+  if (!fn) throw new Error(`Unknown provider "${provider}"`);
+
+  const text = await fn(topic, today);
+
   if (/^NO.?NEWS$/i.test(text) || /\bNO.?NEWS\b/i.test(text)) {
     console.log(`  No significant news for: ${topic} — skipping`);
     return null;

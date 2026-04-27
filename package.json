@@ -1,12 +1,16 @@
 {
   "name": "tech-news-digest",
   "version": "1.0.0",
-  "description": "Daily tech news digest via Claude + Telegram",
+  "description": "Daily tech news digest via Claude / Gemini / OpenAI + Telegram",
   "type": "module",
   "scripts": {
     "start": "node agent.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0"
+  },
+  "optionalDependencies": {
+    "@google/genai": "^1.0.0",
+    "openai": "^4.0.0"
   }
 }
