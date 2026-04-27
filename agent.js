@@ -25,8 +25,6 @@ if (!model) {
   process.exit(1);
 }
 
-console.log(`Provider: ${provider} / Model: ${model}`);
-
 // -- Build the prompt ---------------------------------------------------------
 function buildPrompt(topic, today) {
   return (
@@ -40,14 +38,34 @@ function buildPrompt(topic, today) {
   );
 }
 
+// -- Provider init (runs once before the topic loop) --------------------------
+async function initProvider() {
+  if (provider === "claude") {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: ANTHROPIC_API_KEY");
+    return new Anthropic({ apiKey });
+  }
+
+  if (provider === "gemini") {
+    const { GoogleGenAI } = await import("@google/genai");
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: GEMINI_API_KEY");
+    return new GoogleGenAI({ apiKey });
+  }
+
+  if (provider === "openai") {
+    const { default: OpenAI } = await import("openai");
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: OPENAI_API_KEY");
+    return new OpenAI({ apiKey });
+  }
+
+  throw new Error(`Unknown provider "${provider}". Supported: claude, gemini, openai`);
+}
+
 // -- Provider: Claude ---------------------------------------------------------
-async function summarizeWithClaude(topic, today) {
-  const { default: Anthropic } = await import("@anthropic-ai/sdk");
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Missing env var: ANTHROPIC_API_KEY");
-
-  const client = new Anthropic({ apiKey });
+async function summarizeWithClaude(client, topic, today) {
   const messages = [{ role: "user", content: buildPrompt(topic, today) }];
 
   let response;
@@ -76,14 +94,8 @@ async function summarizeWithClaude(topic, today) {
 }
 
 // -- Provider: Gemini ---------------------------------------------------------
-async function summarizeWithGemini(topic, today) {
-  const { GoogleGenAI } = await import("@google/genai");
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Missing env var: GEMINI_API_KEY");
-
-  const ai = new GoogleGenAI({ apiKey });
-  const response = await ai.models.generateContent({
+async function summarizeWithGemini(client, topic, today) {
+  const response = await client.models.generateContent({
     model,
     contents: [{ role: "user", parts: [{ text: buildPrompt(topic, today) }] }],
     config: { tools: [{ googleSearch: {} }] },
@@ -96,14 +108,8 @@ async function summarizeWithGemini(topic, today) {
 }
 
 // -- Provider: OpenAI ---------------------------------------------------------
-async function summarizeWithOpenAI(topic, today) {
-  const { default: OpenAI } = await import("openai");
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing env var: OPENAI_API_KEY");
-
-  const openai = new OpenAI({ apiKey });
-  const response = await openai.responses.create({
+async function summarizeWithOpenAI(client, topic, today) {
+  const response = await client.responses.create({
     model,
     tools: [{ type: "web_search_preview" }],
     input: buildPrompt(topic, today),
@@ -113,17 +119,17 @@ async function summarizeWithOpenAI(topic, today) {
 }
 
 // -- Dispatch -----------------------------------------------------------------
-const PROVIDERS = { claude: summarizeWithClaude, gemini: summarizeWithGemini, openai: summarizeWithOpenAI };
+const SUMMARIZERS = {
+  claude: summarizeWithClaude,
+  gemini: summarizeWithGemini,
+  openai: summarizeWithOpenAI,
+};
 
-async function summarizeTopic(topic) {
+async function summarizeTopic(client, topic) {
   console.log(`  Researching: ${topic}`);
 
   const today = new Date().toISOString().split("T")[0];
-  const fn = PROVIDERS[provider];
-
-  if (!fn) throw new Error(`Unknown provider "${provider}"`);
-
-  const text = await fn(topic, today);
+  const text = await SUMMARIZERS[provider](client, topic, today);
 
   if (/^NO.?NEWS$/i.test(text) || /\bNO.?NEWS\b/i.test(text)) {
     console.log(`  No significant news for: ${topic} — skipping`);
@@ -184,13 +190,17 @@ async function main() {
   );
 
   console.log(`\nTech News Digest -- ${date}`);
+  console.log(`Provider: ${provider} / Model: ${model}`);
   console.log(`Topics: ${topics.join(", ")}\n`);
+
+  // Load SDK and validate API key once before processing any topics
+  const client = await initProvider();
 
   const summaries = [];
 
   for (const topic of topics) {
     try {
-      const summary = await summarizeTopic(topic);
+      const summary = await summarizeTopic(client, topic);
       if (summary) summaries.push(summary);
     } catch (err) {
       console.error(`  Failed for topic "${topic}":`, err.message);
