@@ -8,6 +8,6 @@
   ],
   "language": "English",
   "maxStoriesPerTopic": 5,
-  "provider": "claude",
-  "model": "claude-sonnet-4-20250514"
+  "provider": "gemini",
+  "model": "gemini-2.0-flash"
 }
