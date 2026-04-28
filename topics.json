@@ -8,6 +8,6 @@
   ],
   "language": "English",
   "maxStoriesPerTopic": 5,
-  "provider": "gemini",
-  "model": "gemini-2.0-flash"
+  "provider": "nvidia",
+  "model": "meta/llama-3.3-70b-instruct"
 }
