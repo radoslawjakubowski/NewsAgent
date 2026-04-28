@@ -11,6 +11,7 @@
   },
   "optionalDependencies": {
     "@google/genai": "^1.0.0",
+    "@tavily/core": "^0.3.0",
     "openai": "^4.0.0"
   }
 }

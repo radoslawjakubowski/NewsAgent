@@ -13,15 +13,16 @@ const config = JSON.parse(readFileSync("topics.json", "utf-8"));
 const { topics, language, maxStoriesPerTopic, provider = "claude" } = config;
 
 const DEFAULT_MODELS = {
-  claude: "claude-sonnet-4-20250514",
-  gemini: "gemini-2.0-flash",
-  openai: "gpt-4o",
+  claude:  "claude-sonnet-4-20250514",
+  gemini:  "gemini-2.0-flash",
+  openai:  "gpt-4o",
+  nvidia:  "meta/llama-3.3-70b-instruct",
 };
 
 const model = config.model ?? DEFAULT_MODELS[provider];
 
 if (!model) {
-  console.error(`Unknown provider "${provider}". Supported: claude, gemini, openai`);
+  console.error(`Unknown provider "${provider}". Supported: claude, gemini, openai, nvidia`);
   process.exit(1);
 }
 
@@ -36,32 +37,6 @@ function buildPrompt(topic, today) {
     `- [Story title](URL) -- 1-2 sentence summary of what happened and why it matters.\n\n` +
     `Output ONLY the formatted list above or ONLY the token NO_NEWS. No other text whatsoever.`
   );
-}
-
-// -- Provider init (runs once before the topic loop) --------------------------
-async function initProvider() {
-  if (provider === "claude") {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("Missing env var: ANTHROPIC_API_KEY");
-    return new Anthropic({ apiKey });
-  }
-
-  if (provider === "gemini") {
-    const { GoogleGenAI } = await import("@google/genai");
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("Missing env var: GEMINI_API_KEY");
-    return new GoogleGenAI({ apiKey });
-  }
-
-  if (provider === "openai") {
-    const { default: OpenAI } = await import("openai");
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("Missing env var: OPENAI_API_KEY");
-    return new OpenAI({ apiKey });
-  }
-
-  throw new Error(`Unknown provider "${provider}". Supported: claude, gemini, openai`);
 }
 
 // -- Provider: Claude ---------------------------------------------------------
@@ -118,18 +93,111 @@ async function summarizeWithOpenAI(client, topic, today) {
   return response.output_text?.trim() ?? "";
 }
 
-// -- Dispatch -----------------------------------------------------------------
-const SUMMARIZERS = {
-  claude: summarizeWithClaude,
-  gemini: summarizeWithGemini,
-  openai: summarizeWithOpenAI,
-};
+// -- Provider: NVIDIA (NIM) ---------------------------------------------------
+// NVIDIA's API is OpenAI-compatible but has no built-in search tool.
+// Tavily is used as the web-search tool via a manual tool-calling loop.
+async function summarizeWithNvidia(llm, search, topic, today) {
+  const tools = [
+    {
+      type: "function",
+      function: {
+        name: "web_search",
+        description: "Search the web for recent news articles and information.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "The search query" },
+          },
+          required: ["query"],
+        },
+      },
+    },
+  ];
 
-async function summarizeTopic(client, topic) {
+  const messages = [{ role: "user", content: buildPrompt(topic, today) }];
+
+  while (true) {
+    const response = await llm.chat.completions.create({
+      model,
+      messages,
+      tools,
+      tool_choice: "auto",
+      max_tokens: 1024,
+    });
+
+    const choice = response.choices[0];
+    messages.push(choice.message);
+
+    if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) break;
+
+    for (const toolCall of choice.message.tool_calls) {
+      let content;
+      try {
+        const { query } = JSON.parse(toolCall.function.arguments);
+        const results = await search.search(query, { maxResults: 5 });
+        content = results.results
+          .map((r) =>
+            `Title: ${r.title}\nURL: ${r.url}\nPublished: ${r.publishedDate ?? "unknown"}\n${r.content}`
+          )
+          .join("\n\n---\n\n");
+      } catch (e) {
+        content = `Search failed: ${e.message}`;
+      }
+      messages.push({ role: "tool", tool_call_id: toolCall.id, content });
+    }
+  }
+
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  return (typeof lastAssistant?.content === "string" ? lastAssistant.content : "").trim();
+}
+
+// -- Provider init (runs once; returns a bound summarize(topic, today) fn) ----
+async function initProvider() {
+  if (provider === "claude") {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: ANTHROPIC_API_KEY");
+    const client = new Anthropic({ apiKey });
+    return (topic, today) => summarizeWithClaude(client, topic, today);
+  }
+
+  if (provider === "gemini") {
+    const { GoogleGenAI } = await import("@google/genai");
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: GEMINI_API_KEY");
+    const client = new GoogleGenAI({ apiKey });
+    return (topic, today) => summarizeWithGemini(client, topic, today);
+  }
+
+  if (provider === "openai") {
+    const { default: OpenAI } = await import("openai");
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("Missing env var: OPENAI_API_KEY");
+    const client = new OpenAI({ apiKey });
+    return (topic, today) => summarizeWithOpenAI(client, topic, today);
+  }
+
+  if (provider === "nvidia") {
+    const { default: OpenAI } = await import("openai");
+    const { tavily } = await import("@tavily/core");
+    const nvApiKey = process.env.NVIDIA_API_KEY;
+    if (!nvApiKey) throw new Error("Missing env var: NVIDIA_API_KEY");
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    if (!tavilyKey) throw new Error("Missing env var: TAVILY_API_KEY");
+    const llm = new OpenAI({ apiKey: nvApiKey, baseURL: "https://integrate.api.nvidia.com/v1" });
+    const search = tavily({ apiKey: tavilyKey });
+    return (topic, today) => summarizeWithNvidia(llm, search, topic, today);
+  }
+
+  throw new Error(`Unknown provider "${provider}". Supported: claude, gemini, openai, nvidia`);
+}
+
+// -- Summarize one topic ------------------------------------------------------
+async function summarizeTopic(summarize, topic) {
   console.log(`  Researching: ${topic}`);
 
   const today = new Date().toISOString().split("T")[0];
-  const text = await SUMMARIZERS[provider](client, topic, today);
+  const text = await summarize(topic, today);
 
   if (/^NO.?NEWS$/i.test(text) || /\bNO.?NEWS\b/i.test(text)) {
     console.log(`  No significant news for: ${topic} — skipping`);
@@ -193,14 +261,14 @@ async function main() {
   console.log(`Provider: ${provider} / Model: ${model}`);
   console.log(`Topics: ${topics.join(", ")}\n`);
 
-  // Load SDK and validate API key once before processing any topics
-  const client = await initProvider();
+  // Load SDK and validate API key(s) once before processing any topics
+  const summarize = await initProvider();
 
   const summaries = [];
 
   for (const topic of topics) {
     try {
-      const summary = await summarizeTopic(client, topic);
+      const summary = await summarizeTopic(summarize, topic);
       if (summary) summaries.push(summary);
     } catch (err) {
       console.error(`  Failed for topic "${topic}":`, err.message);

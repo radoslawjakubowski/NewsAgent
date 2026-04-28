@@ -47,8 +47,9 @@ Set `provider` and (optionally) `model` in `topics.json`:
 | `"claude"` | `claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
 | `"gemini"` | `gemini-2.0-flash` | `GEMINI_API_KEY` |
 | `"openai"` | `gpt-4o` | `OPENAI_API_KEY` |
+| `"nvidia"` | `meta/llama-3.3-70b-instruct` | `NVIDIA_API_KEY` + `TAVILY_API_KEY` |
 
-Each provider uses its own native web-search tool — no external search API needed.
+Claude, Gemini, and OpenAI use their own native web-search tools. NVIDIA's NIM API is OpenAI-compatible but has no built-in search, so it uses [Tavily](https://tavily.com) (free tier: 1000 searches/month) via a tool-calling loop.
 
 ### 4. Add GitHub Secrets
 
@@ -59,6 +60,8 @@ Go to your repo → **Settings → Secrets and variables → Actions → New rep
 | `ANTHROPIC_API_KEY` | From [console.anthropic.com](https://console.anthropic.com) — if using Claude |
 | `GEMINI_API_KEY` | From [aistudio.google.com](https://aistudio.google.com) — if using Gemini |
 | `OPENAI_API_KEY` | From [platform.openai.com](https://platform.openai.com) — if using OpenAI |
+| `NVIDIA_API_KEY` | From [build.nvidia.com](https://build.nvidia.com) — if using NVIDIA |
+| `TAVILY_API_KEY` | From [tavily.com](https://tavily.com) — if using NVIDIA (web search) |
 | `TELEGRAM_BOT_TOKEN` | Your bot token from [@BotFather](https://t.me/BotFather) |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat/user ID (see below) |
 
